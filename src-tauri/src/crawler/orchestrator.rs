@@ -148,6 +148,14 @@ impl CrawlerOrchestrator {
             CrawlMode::Creator => self.run_creator().await?,
         }
 
+        let progress = self.get_progress().await;
+        if progress.fetched_videos == 0 {
+            let err_msg = format!("爬取完成但未获取到任何视频。错误: {}", 
+                if progress.errors.is_empty() { "未知（请检查登录状态和网络连接）".to_string() } 
+                else { progress.errors.join("; ") });
+            return Err(anyhow!("{}", err_msg));
+        }
+
         self.update_progress(|p| p.status = ProgressStatus::Completed).await;
         Ok(())
     }
@@ -156,6 +164,8 @@ impl CrawlerOrchestrator {
     async fn run_search(&self) -> Result<()> {
         let keywords = self.config.keywords.clone()
             .ok_or_else(|| anyhow!("Search 模式需要提供关键词"))?;
+
+        let start_count = self.get_progress().await.fetched_videos;
 
         for keyword in &keywords {
             self.update_progress(|p| {
