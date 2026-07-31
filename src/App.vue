@@ -345,6 +345,18 @@ let cookiePollTimer: ReturnType<typeof setInterval> | null = null;
 async function handleOpenLogin() {
   try {
     loginStatus.value = "connecting";
+    
+    // 先检查是否已有登录窗口（复用已有登录态）
+    try {
+      const existing = await getLoginCookies();
+      const existingNames = existing.cookies.split(";").map((c: string) => c.trim().split("=")[0]);
+      if ((existingNames.includes("sessionid") || existingNames.includes("sid_tt")) && existing.cookies.length > 50) {
+        cookieInput.value = existing.cookies;
+        loginStatus.value = "connected";
+        return;
+      }
+    } catch (_) { /* 窗口未打开，继续创建新窗口 */ }
+    
     await openLoginWindow();
     ElMessage.success("请在新窗口中扫码登录");
     
@@ -360,36 +372,38 @@ function startCookiePolling() {
   if (cookiePollTimer) clearInterval(cookiePollTimer);
   let pollCount = 0;
   const maxPolls = 120; // 最多轮询 120 次 (约 6 分钟)
+  // 等待 2 秒让窗口完全加载并稳定，跳过初始缓存 cookie
+  const initialDelay = 2000;
   
-  cookiePollTimer = setInterval(async () => {
-    pollCount++;
-    if (pollCount > maxPolls) {
-      clearInterval(cookiePollTimer!);
-      cookiePollTimer = null;
-      loginStatus.value = "disconnected";
-      return;
-    }
-    
-    try {
-      const result = await getLoginCookies();
-      // 精确匹配 Cookie 名称，避免 passport_auth_mix_state 误判
-      const cookieNames = result.cookies.split(";").map((c: string) => c.trim().split("=")[0]);
-      const hasLogin = cookieNames.includes("sessionid") || 
-                       cookieNames.includes("sid_tt");
-      
-      if (hasLogin && result.cookies.length > 50) {
+  setTimeout(() => {
+    cookiePollTimer = setInterval(async () => {
+      pollCount++;
+      if (pollCount > maxPolls) {
         clearInterval(cookiePollTimer!);
         cookiePollTimer = null;
-        cookieInput.value = result.cookies;
-        loginStatus.value = "connected";
-        ElMessage.success("扫码登录成功！登录窗口保持打开以供搜索使用");
-        // 注意：不关闭登录窗口，搜索功能需要用到浏览器环境
+        loginStatus.value = "disconnected";
+        return;
       }
-    } catch (e) {
-      // 窗口可能已关闭
-      console.warn("轮询 Cookie 失败:", e);
-    }
-  }, 3000);
+      
+      try {
+        const result = await getLoginCookies();
+        const cookieNames = result.cookies.split(";").map((c: string) => c.trim().split("=")[0]);
+        const hasLogin = cookieNames.includes("sessionid") || 
+                         cookieNames.includes("sid_tt");
+        
+        if (hasLogin && result.cookies.length > 50 && pollCount > 1) {
+          clearInterval(cookiePollTimer!);
+          cookiePollTimer = null;
+          cookieInput.value = result.cookies;
+          loginStatus.value = "connected";
+          // 只有在第二次轮询才判定为新登录（第一次是缓存的旧session）
+          ElMessage.success("扫码登录成功！登录窗口保持打开以供搜索使用");
+        }
+      } catch (e) {
+        console.warn("轮询 Cookie 失败:", e);
+      }
+    }, 3000);
+  }, initialDelay);
 }
 
 async function handleCookieLogin() {
