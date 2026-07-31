@@ -41,10 +41,10 @@ async fn start_crawl(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<String, String> {
-    // 如果没有打开的登录窗口，自动创建一个隐藏窗口
+    // 如果没有打开的登录窗口，自动创建一个隐藏窗口并注入 Cookie
     // 提供浏览器签名环境（即使 Cookie 模式也需要）
     if app.get_webview_window("douyin-login").is_none() {
-        let _ = WebviewWindowBuilder::new(
+        let win = WebviewWindowBuilder::new(
             &app,
             "douyin-login",
             WebviewUrl::External(
@@ -58,6 +58,21 @@ async fn start_crawl(
         .visible(false)
         .build()
         .map_err(|e| format!("创建隐藏登录窗口失败: {}", e))?;
+
+        // 等待窗口加载 douyin.com 首页
+        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+
+        // 注入 Cookie 到隐藏窗口
+        for pair in cookies.split(';') {
+            let pair = pair.trim();
+            if pair.is_empty() { continue; }
+            let escaped = pair.replace('\'', "\\'");
+            let js = format!("document.cookie = '{};path=/;domain=.douyin.com'", escaped);
+            let _ = win.eval(&js);
+        }
+        // 刷新页面让 cookie 生效
+        let _ = win.eval("location.reload()");
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
     }
 
     // 创建 HTTP 客户端
