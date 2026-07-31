@@ -1,0 +1,35 @@
+[package]
+name = "douyin-collector"
+version = "0.1.0"
+description = "抖音数据采集器 - 多模式数据采集桌面工具"
+authors = ["谭哥"]
+license = "Apache-2.0"
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "douyin_collector_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-log = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+reqwest = { version = "0.12", features = ["json", "cookies", "rustls-tls"], default-features = false }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+url = "2"
+regex = "1"
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.23.0"
