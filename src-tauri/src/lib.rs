@@ -198,8 +198,10 @@ async fn browser_search(
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     // 获取登录窗口
-    let win = app.get_webview_window("douyin-login")
-        .ok_or("登录窗口未打开，请先扫码登录")?;
+    let win = match app.get_webview_window("douyin-login") {
+        Some(w) => w,
+        None => return Err("登录窗口未打开，请先扫码登录或使用 Cookie 模式".to_string()),
+    };
     
     // 清空之前的结果
     {

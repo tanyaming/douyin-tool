@@ -173,7 +173,13 @@ impl CrawlerOrchestrator {
                 }
 
                 // 优先使用浏览器搜索（有完整签名环境），失败则回退到 reqwest
-                let search_result = if self.app_handle.is_some() && self.search_results.is_some() {
+                // 如果登录窗口不存在或者浏览器搜索失败，静默回退到 reqwest
+            let should_use_reqwest = self.app_handle.is_none() || self.search_results.is_none()
+                || self.app_handle.as_ref()
+                    .and_then(|app| app.get_webview_window("douyin-login"))
+                    .is_none();
+
+            let search_result = if !should_use_reqwest {
                     match self.browser_search(keyword, offset, &search_id).await {
                         Ok(data) => Ok(data),
                         Err(e) => {
@@ -568,10 +574,12 @@ impl CrawlerOrchestrator {
     async fn browser_search(&self, keyword: &str, offset: u32, search_id: &str) -> Result<Value> {
         let app = self.app_handle.as_ref()
             .ok_or_else(|| anyhow!("无 AppHandle"))?;
-        let win = app.get_webview_window("douyin-login")
-            .ok_or_else(|| anyhow!("登录窗口未打开"))?;
+        let win = match app.get_webview_window("douyin-login") {
+            Some(w) => w,
+            None => return Err(anyhow!("登录窗口未打开")),
+        };
         let escaped = keyword.replace('\\', "\\\\").replace('"', "\\\"");
-        let _ = win.eval("document.cookie = 'search_result=; path=/'");
+        let _ = win.eval("document.cookie = 'search_result=; path=/'").ok();
         let js = format!(r#"(async () => {{ try {{ const p = new URLSearchParams({{ search_channel: 'aweme_general', keyword: "{}", search_source: 'tab_search', offset: '{}', count: '15', search_id: '{}' }}); const r = await fetch('/aweme/v1/web/general/search/single/?' + p, {{ credentials: 'include' }}); const d = await r.json(); document.cookie = 'search_result=' + btoa(unescape(encodeURIComponent(JSON.stringify(d)))) + ';path=/'; }} catch(e) {{ document.cookie = 'search_result=' + btoa(unescape(encodeURIComponent(JSON.stringify({{ error: e.message }})))) + ';path=/'; }} }})();"#, escaped, offset, search_id);
         win.eval(&js).map_err(|e| anyhow!("执行搜索 JS 失败: {}", e))?;
         for _ in 0..150 { tokio::time::sleep(tokio::time::Duration::from_millis(100)).await; if app.get_webview_window("douyin-login").is_none() { return Err(anyhow!("登录窗口已关闭")); } if let Ok(cookies) = win.cookies() { for c in &cookies { if c.name() == "search_result" { let raw = c.value(); if raw.is_empty() { continue; } use base64::Engine; let decoded = base64::engine::general_purpose::STANDARD.decode(raw.as_bytes()).map_err(|e| anyhow!("base64: {}", e))?; let json_str = String::from_utf8(decoded).map_err(|e| anyhow!("utf8: {}", e))?; return Ok(serde_json::from_str(&json_str)?); } } } } Err(anyhow!("搜索超时（15秒无响应）"))
