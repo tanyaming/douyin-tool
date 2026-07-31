@@ -69,7 +69,7 @@ pub struct DouyinClient {
     client: reqwest::Client,
     signer: Signer,
     base_url: String,
-    cookies: String,
+    _cookies: String,
 }
 
 impl DouyinClient {
@@ -98,7 +98,7 @@ impl DouyinClient {
             client,
             signer,
             base_url: "https://www.douyin.com".to_string(),
-            cookies,
+            _cookies: cookies,
         })
     }
 

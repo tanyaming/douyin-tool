@@ -124,7 +124,7 @@ impl SsoLoginClient {
             .and_then(|v| v.as_u64())
             .unwrap_or(999);
 
-        let status = json.get("data")
+        let _status = json.get("data")
             .and_then(|d| d.get("status"))
             .and_then(|v| v.as_str());
 

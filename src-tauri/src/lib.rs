@@ -41,6 +41,25 @@ async fn start_crawl(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<String, String> {
+    // 如果没有打开的登录窗口，自动创建一个隐藏窗口
+    // 提供浏览器签名环境（即使 Cookie 模式也需要）
+    if app.get_webview_window("douyin-login").is_none() {
+        let _ = WebviewWindowBuilder::new(
+            &app,
+            "douyin-login",
+            WebviewUrl::External(
+                "https://www.douyin.com"
+                    .parse()
+                    .map_err(|e| format!("URL 解析失败: {}", e))?,
+            ),
+        )
+        .title("douyin-login")
+        .inner_size(1.0, 1.0)
+        .visible(false)
+        .build()
+        .map_err(|e| format!("创建隐藏登录窗口失败: {}", e))?;
+    }
+
     // 创建 HTTP 客户端
     let client = DouyinClient::new(cookies, user_agent, ms_token)
         .map_err(|e| format!("创建客户端失败: {}", e))?;
@@ -143,6 +162,33 @@ async fn open_login_window(app: AppHandle) -> Result<String, String> {
     });
 
     Ok("登录窗口已打开，请扫码登录".to_string())
+}
+
+/// 打开隐藏的登录窗口（用于 Cookie 模式下的浏览器搜索签名环境）
+/// 不显示给用户，只作为浏览器环境提供签名能力
+#[tauri::command]
+async fn open_hidden_login_window(app: AppHandle) -> Result<String, String> {
+    // 检查是否已有登录窗口（无论是可见还是隐藏）
+    if app.get_webview_window("douyin-login").is_some() {
+        return Ok("登录窗口已存在".to_string());
+    }
+
+    let _win = WebviewWindowBuilder::new(
+        &app,
+        "douyin-login",
+        WebviewUrl::External(
+            "https://www.douyin.com"
+                .parse()
+                .map_err(|e| format!("URL 解析失败: {}", e))?,
+        ),
+    )
+    .title("douyin-login")
+    .inner_size(1.0, 1.0)
+    .visible(false)
+    .build()
+    .map_err(|e| format!("创建隐藏登录窗口失败: {}", e))?;
+
+    Ok("隐藏登录窗口已创建".to_string())
 }
 
 /// 关闭登录窗口
@@ -307,6 +353,7 @@ pub fn run() {
             parse_creator_url,
             generate_webid,
             open_login_window,
+            open_hidden_login_window,
             close_login_window,
             get_login_cookies,
             browser_search,

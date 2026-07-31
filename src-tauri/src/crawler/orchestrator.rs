@@ -9,7 +9,6 @@
 
 use std::sync::Arc;
 use std::io::Write as IoWrite;
-use std::collections::HashMap;
 use tokio::sync::{mpsc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -150,9 +149,11 @@ impl CrawlerOrchestrator {
 
         let progress = self.get_progress().await;
         if progress.fetched_videos == 0 {
-            let err_msg = format!("爬取完成但未获取到任何视频。错误: {}", 
-                if progress.errors.is_empty() { "未知（请检查登录状态和网络连接）".to_string() } 
-                else { progress.errors.join("; ") });
+            let err_msg = if progress.errors.is_empty() {
+                "爬取完成但未获取到任何视频。请检查登录状态、网络连接或搜索关键词".to_string()
+            } else {
+                format!("爬取完成但未获取到任何视频。错误详情: {}", progress.errors.join("; "))
+            };
             return Err(anyhow!("{}", err_msg));
         }
 
@@ -164,8 +165,6 @@ impl CrawlerOrchestrator {
     async fn run_search(&self) -> Result<()> {
         let keywords = self.config.keywords.clone()
             .ok_or_else(|| anyhow!("Search 模式需要提供关键词"))?;
-
-        let start_count = self.get_progress().await.fetched_videos;
 
         for keyword in &keywords {
             self.update_progress(|p| {
@@ -220,13 +219,13 @@ impl CrawlerOrchestrator {
                         let extra = resp.get("extra").cloned();
 
                         if data.is_none() {
-                            self.add_error(format!("关键词 '{}' 搜索结果为空", keyword)).await;
-                            break;
+                            self.add_error(format!("关键词 '{}' 搜索结果为空，跳过", keyword)).await;
+                            break; // 当前关键词无结果，继续下一个关键词
                         }
 
                         let aweme_list = data.unwrap();
                         if aweme_list.as_array().map_or(true, |a| a.is_empty()) {
-                            break;
+                            break; // 当前关键词无更多结果，继续下一个关键词
                         }
 
                         search_id = extra
@@ -452,7 +451,13 @@ impl CrawlerOrchestrator {
                 break;
             }
 
-            match self.client.get_comments(aweme_id, cursor).await {
+            // 优先走浏览器路径（完整签名），失败回退 reqwest
+            let result = match self.browser_fetch_comments(aweme_id, cursor).await {
+                Ok(v) => Ok(v),
+                Err(_) => self.client.get_comments(aweme_id, cursor).await,
+            };
+
+            match result {
                 Ok(resp) => {
                     let comment_list = resp.get("comments").cloned();
                     let has_more = resp.get("has_more")
@@ -491,7 +496,6 @@ impl CrawlerOrchestrator {
                     self.sleep().await;
                 }
                 Err(e) => {
-                    // 评论签名通常需要浏览器环境，reqwest 签名不足时报错一次即可
                     let err_msg = format!("获取评论失败 (aweme_id={}): {}", aweme_id, e);
                     self.add_error(err_msg).await;
                     break;
@@ -579,8 +583,47 @@ impl CrawlerOrchestrator {
         Ok(())
     }
 
-    // ===== 浏览器搜索 =====
+    // ===== 浏览器方法 =====
     
+    /// 通过浏览器获取评论（利用登录窗口的完整签名环境）
+    async fn browser_fetch_comments(&self, aweme_id: &str, cursor: u32) -> Result<Value> {
+        let app = self.app_handle.as_ref()
+            .ok_or_else(|| anyhow!("无 AppHandle"))?;
+        let win = match app.get_webview_window("douyin-login") {
+            Some(w) => w,
+            None => return Err(anyhow!("登录窗口未打开")),
+        };
+
+        let js = format!(
+            r#"(async () => {{ try {{ const r = await fetch('/aweme/v1/web/comment/list/?aweme_id={aweme_id}&cursor={cursor}&count=20&item_type=0', {{ credentials: 'include' }}); const d = await r.json(); document.cookie = 'comment_result=' + btoa(unescape(encodeURIComponent(JSON.stringify(d)))) + ';path=/'; }} catch(e) {{ document.cookie = 'comment_result=' + btoa(unescape(encodeURIComponent(JSON.stringify({{ error: e.message }})))) + ';path=/'; }} }})();"#,
+            aweme_id = aweme_id, cursor = cursor
+        );
+        win.eval(&js).map_err(|e| anyhow!("执行评论 JS 失败: {}", e))?;
+
+        for _ in 0..100 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            if app.get_webview_window("douyin-login").is_none() {
+                return Err(anyhow!("登录窗口已关闭"));
+            }
+            if let Ok(cookies) = win.cookies() {
+                for c in &cookies {
+                    if c.name() == "comment_result" {
+                        let raw = c.value();
+                        if raw.is_empty() { continue; }
+                        use base64::Engine;
+                        let decoded = base64::engine::general_purpose::STANDARD
+                            .decode(raw.as_bytes())
+                            .map_err(|e| anyhow!("base64: {}", e))?;
+                        let json_str = String::from_utf8(decoded)
+                            .map_err(|e| anyhow!("utf8: {}", e))?;
+                        return Ok(serde_json::from_str(&json_str)?);
+                    }
+                }
+            }
+        }
+        Err(anyhow!("评论请求超时（10秒无响应）"))
+    }
+
     /// 通过登录窗口的浏览器环境执行搜索（自动携带签名）
     /// 使用 cookie 中转结果（避免依赖 Tauri IPC，后者在外部 URL 中不可用）
     async fn browser_search(&self, keyword: &str, offset: u32, search_id: &str) -> Result<Value> {
