@@ -76,13 +76,19 @@ async fn start_crawl(
     let app_for_progress = app.clone();
     let cancel_for_task = cancel.clone();
     tokio::spawn(async move {
+        log::info!("[Crawler] 爬取任务开始");
         let result = tokio::select! {
             r = orchestrator.start() => r,
             _ = cancel_for_task.cancelled() => {
+                log::info!("[Crawler] 收到取消信号");
                 let _ = app_for_error.emit("crawl-error", "爬取已停止".to_string());
                 Ok(())
             }
         };
+        match &result {
+            Ok(_) => log::info!("[Crawler] 爬取任务正常结束"),
+            Err(e) => log::error!("[Crawler] 爬取出错: {}", e),
+        }
         if let Err(e) = result {
             let _ = app_for_error.emit("crawl-error", format!("爬取出错: {}", e));
         }

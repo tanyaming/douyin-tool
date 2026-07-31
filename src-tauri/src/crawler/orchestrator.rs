@@ -177,6 +177,7 @@ impl CrawlerOrchestrator {
             .ok_or_else(|| anyhow!("Search 模式需要提供关键词"))?;
 
         for keyword in &keywords {
+            log::info!("[Crawler] 开始搜索关键词: '{}'", keyword);
             self.update_progress(|p| {
                 p.current_keyword = keyword.clone();
             }).await;
@@ -193,6 +194,7 @@ impl CrawlerOrchestrator {
                 }
 
                 // 使用 a_bogus 签名走 reqwest（不再依赖浏览器窗口）
+                log::info!("[Crawler] reqwest搜索: kw='{}' offset={}", keyword, offset);
                 let search_result = self.client.search_by_keyword(
                     keyword,
                     offset,
@@ -202,7 +204,9 @@ impl CrawlerOrchestrator {
                 ).await;
 
                 match search_result {
-                    Ok(resp) => {
+                    Ok(ref resp) => {
+                        let count = resp.get("data").and_then(|d| d.as_array()).map(|a| a.len()).unwrap_or(0);
+                        log::info!("[Crawler] 搜索成功: kw='{}' offset={} 结果数={}", keyword, offset, count);
                         let data = resp.get("data").cloned();
                         let extra = resp.get("extra").cloned();
 
@@ -240,7 +244,8 @@ impl CrawlerOrchestrator {
                         offset += limit;
                         self.sleep().await;
                     }
-                    Err(e) => {
+                    Err(ref e) => {
+                        log::error!("[Crawler] 搜索失败: kw='{}' err={}", keyword, e);
                         self.add_error(format!("搜索失败: {}", e)).await;
                         break;
                     }

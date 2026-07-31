@@ -77,13 +77,18 @@ impl Sm3 {
     }
 
     fn fill(&mut self) {
-        let total_bits = (self.size * 8) as u64;
+        let total_bits = (self.size as u64).checked_mul(8).unwrap_or(0);
         self.chunk.push(0x80);
         let pad = self.chunk.len() % 64;
         let zeros = if 64 - pad < 8 { 64 - pad + 56 } else { 56 - pad };
         self.chunk.extend(std::iter::repeat(0u8).take(zeros));
         for i in (0..8).rev() {
-            self.chunk.push(((total_bits >> (8 * i)) & 0xff) as u8);
+            let shift = 8u32.saturating_mul(i as u32);
+            if shift < 64 {
+                self.chunk.push(((total_bits >> shift) & 0xff) as u8);
+            } else {
+                self.chunk.push(0);
+            }
         }
     }
 
@@ -114,6 +119,8 @@ impl Sm3 {
 }
 
 fn rotl(x: u32, n: u32) -> u32 {
+    let n = n % 32;
+    if n == 0 { return x; }
     (x << n) | (x >> (32 - n))
 }
 

@@ -148,6 +148,7 @@ impl DouyinClient {
         let uri = "/aweme/v1/web/general/search/single/";
         let a_bogus = self.signer.sign_uri(uri, &query_string);
         if !a_bogus.is_empty() {
+            log::info!("[Client] search a_bogus={}", a_bogus);
             params.insert("a_bogus".to_string(), a_bogus);
         }
 
