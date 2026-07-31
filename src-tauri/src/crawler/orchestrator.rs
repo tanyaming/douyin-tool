@@ -187,6 +187,8 @@ impl CrawlerOrchestrator {
                     .and_then(|app| app.get_webview_window("douyin-login"))
                     .is_some();
 
+                eprintln!("[Crawler] keyword='{}' offset={} has_browser={}", keyword, offset, has_browser);
+
                 let search_result = if has_browser {
                     // 有登录窗口 → 走浏览器（完整签名环境）
                     self.browser_search(keyword, offset, &search_id).await
