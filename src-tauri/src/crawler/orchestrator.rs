@@ -491,7 +491,9 @@ impl CrawlerOrchestrator {
                     self.sleep().await;
                 }
                 Err(e) => {
-                    self.add_error(format!("获取评论失败: {}", e)).await;
+                    // 评论签名通常需要浏览器环境，reqwest 签名不足时报错一次即可
+                    let err_msg = format!("获取评论失败 (aweme_id={}): {}", aweme_id, e);
+                    self.add_error(err_msg).await;
                     break;
                 }
             }

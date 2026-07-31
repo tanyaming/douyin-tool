@@ -1,5 +1,5 @@
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, COOKIE, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -175,9 +175,13 @@ impl DouyinClient {
 
         let url = format!("{}/aweme/v1/web/comment/list/", self.base_url);
         let resp = self.client.get(&url).query(&params).send().await?;
+        let status = resp.status();
         let text = resp.text().await.context("读取评论响应失败")?;
+        if text.trim().is_empty() {
+            return Err(anyhow!("评论API返回空响应 (HTTP {})", status));
+        }
         let json: Value = serde_json::from_str(&text)
-            .with_context(|| format!("评论响应JSON解析失败，原始响应前200字符: {}", &text[..text.len().min(200)]))?;
+            .with_context(|| format!("评论响应JSON解析失败，HTTP {}, 原始响应前200字符: {}", status, &text[..text.len().min(200)]))?;
         Ok(json)
     }
 
@@ -201,9 +205,13 @@ impl DouyinClient {
 
         let url = format!("{}/aweme/v1/web/comment/list/reply/", self.base_url);
         let resp = self.client.get(&url).query(&params).send().await?;
+        let status = resp.status();
         let text = resp.text().await.context("读取子评论响应失败")?;
+        if text.trim().is_empty() {
+            return Err(anyhow!("子评论API返回空响应 (HTTP {})", status));
+        }
         let json: Value = serde_json::from_str(&text)
-            .with_context(|| format!("子评论响应JSON解析失败，原始响应前200字符: {}", &text[..text.len().min(200)]))?;
+            .with_context(|| format!("子评论响应JSON解析失败，HTTP {}, 原始响应前200字符: {}", status, &text[..text.len().min(200)]))?;
         Ok(json)
     }
 
