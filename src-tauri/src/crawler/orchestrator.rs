@@ -94,7 +94,8 @@ pub struct CrawlerOrchestrator {
     config: CrawlConfig,
     progress: Arc<Mutex<CrawlProgress>>,
     progress_tx: mpsc::UnboundedSender<CrawlProgress>,
-    /// 用于浏览器搜索的 AppHandle 和共享结果存储
+    /// 浏览器相关（保留供将来扩展）
+    #[allow(dead_code)]
     app_handle: Option<AppHandle>,
     #[allow(dead_code)]
     search_results: Option<Arc<Mutex<Option<Value>>>>,
@@ -191,20 +192,14 @@ impl CrawlerOrchestrator {
                     break;
                 }
 
-                // 检查登录窗口是否存在
-                let has_browser = self.app_handle.as_ref()
-                    .and_then(|app| app.get_webview_window("douyin-login"))
-                    .is_some();
-
-                eprintln!("[Crawler] keyword='{}' offset={} has_browser={}", keyword, offset, has_browser);
-
-                let search_result = if has_browser {
-                    // 有登录窗口 → 走浏览器（完整签名环境）
-                    self.browser_search(keyword, offset, &search_id).await
-                } else {
-                    // 无登录窗口 → 返回明确错误，提示用户先扫码登录
-                    Err(anyhow!("请先通过「扫码登录」打开登录窗口。仅 Cookie 无法获取签名参数，搜索会失败。"))
-                };
+                // 使用 a_bogus 签名走 reqwest（不再依赖浏览器窗口）
+                let search_result = self.client.search_by_keyword(
+                    keyword,
+                    offset,
+                    self.config.sort_type.clone().unwrap_or(SortType::General),
+                    self.config.publish_time.clone().unwrap_or(PublishTime::Unlimited),
+                    &search_id,
+                ).await;
 
                 match search_result {
                     Ok(resp) => {
@@ -444,12 +439,8 @@ impl CrawlerOrchestrator {
                 break;
             }
 
-            // 优先走浏览器路径（完整签名），失败回退 reqwest
-            let result = match self.browser_fetch_comments(aweme_id, cursor).await {
-                Ok(v) => Ok(v),
-                Err(_) => self.client.get_comments(aweme_id, cursor).await,
-            };
-
+            // 直接使用 reqwest（带 a_bogus 签名）
+            let result = self.client.get_comments(aweme_id, cursor).await;
             match result {
                 Ok(resp) => {
                     let comment_list = resp.get("comments").cloned();
@@ -576,9 +567,9 @@ impl CrawlerOrchestrator {
         Ok(())
     }
 
-    // ===== 浏览器方法 =====
-    
-    /// 通过浏览器获取评论（利用登录窗口的完整签名环境）
+    // ===== 浏览器方法（保留备用）=====
+
+    #[allow(dead_code)]
     async fn browser_fetch_comments(&self, aweme_id: &str, cursor: u32) -> Result<Value> {
         let app = self.app_handle.as_ref()
             .ok_or_else(|| anyhow!("无 AppHandle"))?;
@@ -617,8 +608,8 @@ impl CrawlerOrchestrator {
         Err(anyhow!("评论请求超时（10秒无响应）"))
     }
 
-    /// 通过登录窗口的浏览器环境执行搜索（自动携带签名）
-    /// 使用 cookie 中转结果（避免依赖 Tauri IPC，后者在外部 URL 中不可用）
+    #[allow(dead_code)]
+    /// 通过登录窗口的浏览器环境执行搜索（保留备用）
     async fn browser_search(&self, keyword: &str, offset: u32, search_id: &str) -> Result<Value> {
         let app = self.app_handle.as_ref()
             .ok_or_else(|| anyhow!("无 AppHandle"))?;

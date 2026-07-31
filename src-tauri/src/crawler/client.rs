@@ -140,7 +140,18 @@ impl DouyinClient {
             params.insert(k.to_string(), v);
         }
 
-        let url = format!("{}/aweme/v1/web/general/search/single/", self.base_url);
+        // 构建查询字符串用于签名
+        let query_string: String = params.iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join("&");
+        let uri = "/aweme/v1/web/general/search/single/";
+        let a_bogus = self.signer.sign_uri(uri, &query_string);
+        if !a_bogus.is_empty() {
+            params.insert("a_bogus".to_string(), a_bogus);
+        }
+
+        let url = format!("{}{}", self.base_url, uri);
         let resp = self.client.get(&url).query(&params).send().await?;
         let json: Value = resp.json().await?;
         Ok(json)
@@ -155,7 +166,17 @@ impl DouyinClient {
             params.insert(k.to_string(), v);
         }
 
-        let url = format!("{}/aweme/v1/web/aweme/detail/", self.base_url);
+        let query_string: String = params.iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join("&");
+        let uri = "/aweme/v1/web/aweme/detail/";
+        let a_bogus = self.signer.sign_uri(uri, &query_string);
+        if !a_bogus.is_empty() {
+            params.insert("a_bogus".to_string(), a_bogus);
+        }
+
+        let url = format!("{}{}", self.base_url, uri);
         let resp = self.client.get(&url).query(&params).send().await?;
         let json: Value = resp.json().await?;
         Ok(json.get("aweme_detail").cloned().unwrap_or(Value::Null))
@@ -173,7 +194,17 @@ impl DouyinClient {
             params.insert(k.to_string(), v);
         }
 
-        let url = format!("{}/aweme/v1/web/comment/list/", self.base_url);
+        let query_string: String = params.iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join("&");
+        let uri = "/aweme/v1/web/comment/list/";
+        let a_bogus = self.signer.sign_uri(uri, &query_string);
+        if !a_bogus.is_empty() {
+            params.insert("a_bogus".to_string(), a_bogus);
+        }
+
+        let url = format!("{}{}", self.base_url, uri);
         let resp = self.client.get(&url).query(&params).send().await?;
         let status = resp.status();
         let text = resp.text().await.context("读取评论响应失败")?;
@@ -203,7 +234,17 @@ impl DouyinClient {
             params.insert(k.to_string(), v);
         }
 
-        let url = format!("{}/aweme/v1/web/comment/list/reply/", self.base_url);
+        let query_string: String = params.iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join("&");
+        let uri = "/aweme/v1/web/comment/list/reply/";
+        let a_bogus = self.signer.sign_uri(uri, &query_string);
+        if !a_bogus.is_empty() {
+            params.insert("a_bogus".to_string(), a_bogus);
+        }
+
+        let url = format!("{}{}", self.base_url, uri);
         let resp = self.client.get(&url).query(&params).send().await?;
         let status = resp.status();
         let text = resp.text().await.context("读取子评论响应失败")?;
