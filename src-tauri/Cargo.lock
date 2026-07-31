@@ -729,6 +729,7 @@ dependencies = [
  "tauri-plugin-log",
  "tauri-plugin-shell",
  "tokio",
+ "tokio-util",
  "url",
  "uuid",
 ]

@@ -10,6 +10,7 @@
 use std::sync::Arc;
 use std::io::Write as IoWrite;
 use tokio::sync::{mpsc, Mutex};
+use tokio_util::sync::CancellationToken;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use anyhow::{Result, anyhow};
@@ -97,6 +98,7 @@ pub struct CrawlerOrchestrator {
     app_handle: Option<AppHandle>,
     #[allow(dead_code)]
     search_results: Option<Arc<Mutex<Option<Value>>>>,
+    cancel: CancellationToken,
 }
 
 impl CrawlerOrchestrator {
@@ -105,7 +107,7 @@ impl CrawlerOrchestrator {
         config: CrawlConfig,
         progress_tx: mpsc::UnboundedSender<CrawlProgress>,
     ) -> Self {
-        Self::with_browser(client, config, progress_tx, None, None)
+        Self::with_browser(client, config, progress_tx, None, None, CancellationToken::new())
     }
 
     /// 带浏览器搜索支持的构造函数
@@ -115,6 +117,7 @@ impl CrawlerOrchestrator {
         progress_tx: mpsc::UnboundedSender<CrawlProgress>,
         app_handle: Option<AppHandle>,
         search_results: Option<Arc<Mutex<Option<Value>>>>,
+        cancel: CancellationToken,
     ) -> Self {
         let progress = Arc::new(Mutex::new(CrawlProgress {
             status: ProgressStatus::Idle,
@@ -135,12 +138,17 @@ impl CrawlerOrchestrator {
             progress_tx,
             app_handle,
             search_results,
+            cancel,
         }
     }
 
     /// 启动爬取
     pub async fn start(&self) -> Result<()> {
         self.update_progress(|p| p.status = ProgressStatus::Running).await;
+
+        if self.cancel.is_cancelled() {
+            return Err(anyhow!("任务已取消"));
+        }
 
         match self.config.mode {
             CrawlMode::Search => self.run_search().await?,
@@ -177,6 +185,7 @@ impl CrawlerOrchestrator {
             let limit = 15u32; // 每页15条
 
             loop {
+                if self.cancel.is_cancelled() { return Err(anyhow!("任务已取消")); }
                 if self.config.max_videos > 0
                     && self.get_progress().await.fetched_videos >= self.config.max_videos {
                     break;

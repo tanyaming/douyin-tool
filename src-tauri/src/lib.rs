@@ -6,6 +6,7 @@ pub mod storage;
 
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
+use tokio_util::sync::CancellationToken;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use serde_json::Value;
 
@@ -19,6 +20,8 @@ pub struct AppState {
     pub search_results: Arc<Mutex<Option<Value>>>,
     /// 登录窗口的 Cookie 字符串（供搜索使用）
     pub login_cookies: Arc<Mutex<String>>,
+    /// 取消令牌（用于停止爬取）
+    pub cancel_token: Arc<Mutex<Option<CancellationToken>>>,
 }
 
 impl Default for AppState {
@@ -27,6 +30,7 @@ impl Default for AppState {
             orchestrator: Arc::new(Mutex::new(None)),
             search_results: Arc::new(Mutex::new(None)),
             login_cookies: Arc::new(Mutex::new(String::new())),
+            cancel_token: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -45,20 +49,41 @@ async fn start_crawl(
     let client = DouyinClient::new(cookies, user_agent, ms_token)
         .map_err(|e| format!("创建客户端失败: {}", e))?;
 
+    // 创建取消令牌
+    let cancel = CancellationToken::new();
+    {
+        let mut token = state.cancel_token.lock().await;
+        // 取消之前可能残留的任务
+        if let Some(ref old) = *token {
+            old.cancel();
+        }
+        *token = Some(cancel.clone());
+    }
+
     // 创建进度通道
     let (tx, mut rx) = mpsc::unbounded_channel::<CrawlProgress>();
 
-    // 创建爬虫编排器（带浏览器搜索支持）
+    // 创建爬虫编排器（带浏览器搜索支持和取消令牌）
     let orchestrator = CrawlerOrchestrator::with_browser(
         client, config, tx,
         Some(app.clone()),
         Some(state.search_results.clone()),
+        cancel.clone(),
     );
 
     // 启动后台爬取任务
     let app_for_error = app.clone();
+    let app_for_progress = app.clone();
+    let cancel_for_task = cancel.clone();
     tokio::spawn(async move {
-        if let Err(e) = orchestrator.start().await {
+        let result = tokio::select! {
+            r = orchestrator.start() => r,
+            _ = cancel_for_task.cancelled() => {
+                let _ = app_for_error.emit("crawl-error", "爬取已停止".to_string());
+                Ok(())
+            }
+        };
+        if let Err(e) = result {
             let _ = app_for_error.emit("crawl-error", format!("爬取出错: {}", e));
         }
     });
@@ -66,7 +91,7 @@ async fn start_crawl(
     // 监听进度事件
     tokio::spawn(async move {
         while let Some(progress) = rx.recv().await {
-            let _ = app.emit("crawl-progress", &progress);
+            let _ = app_for_progress.emit("crawl-progress", &progress);
         }
     });
 
@@ -75,8 +100,14 @@ async fn start_crawl(
 
 /// 停止爬取
 #[tauri::command]
-async fn stop_crawl() -> Result<String, String> {
-    Ok("已请求停止".to_string())
+async fn stop_crawl(state: State<'_, AppState>) -> Result<String, String> {
+    let token = state.cancel_token.lock().await;
+    if let Some(ref t) = *token {
+        t.cancel();
+        Ok("已请求停止".to_string())
+    } else {
+        Ok("没有正在进行的爬取任务".to_string())
+    }
 }
 
 /// 解析视频链接
