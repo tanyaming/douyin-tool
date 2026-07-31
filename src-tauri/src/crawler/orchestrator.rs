@@ -228,6 +228,11 @@ impl CrawlerOrchestrator {
                         // 处理每条视频
                         if let Some(items) = aweme_list.as_array() {
                             for item in items {
+                                // 每条视频处理前检查是否已达到最大数量
+                                if self.config.max_videos > 0
+                                    && self.get_progress().await.fetched_videos >= self.config.max_videos {
+                                    break;
+                                }
                                 let aweme_info = item
                                     .get("aweme_info")
                                     .or_else(|| item.get("aweme_mix_info")
@@ -298,6 +303,10 @@ impl CrawlerOrchestrator {
 
         // 获取视频详情
         for aweme_id in &aweme_ids {
+            if self.config.max_videos > 0
+                && self.get_progress().await.fetched_videos >= self.config.max_videos {
+                break;
+            }
             match self.client.get_video_detail(aweme_id).await {
                 Ok(detail) => {
                     self.process_aweme(&detail).await?;
@@ -348,6 +357,10 @@ impl CrawlerOrchestrator {
 
                         if let Some(list) = aweme_list.and_then(|l| l.as_array().cloned()) {
                             for aweme in &list {
+                                if self.config.max_videos > 0
+                                    && self.get_progress().await.fetched_videos >= self.config.max_videos {
+                                    break;
+                                }
                                 self.process_aweme(aweme).await?;
                             }
                         }
