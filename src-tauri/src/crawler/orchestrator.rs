@@ -95,6 +95,7 @@ pub struct CrawlerOrchestrator {
     progress_tx: mpsc::UnboundedSender<CrawlProgress>,
     /// 用于浏览器搜索的 AppHandle 和共享结果存储
     app_handle: Option<AppHandle>,
+    #[allow(dead_code)]
     search_results: Option<Arc<Mutex<Option<Value>>>>,
 }
 
@@ -181,36 +182,17 @@ impl CrawlerOrchestrator {
                     break;
                 }
 
-                // 优先使用浏览器搜索（有完整签名环境），失败则回退到 reqwest
-                // 如果登录窗口不存在或者浏览器搜索失败，静默回退到 reqwest
-            let should_use_reqwest = self.app_handle.is_none() || self.search_results.is_none()
-                || self.app_handle.as_ref()
+                // 检查登录窗口是否存在
+                let has_browser = self.app_handle.as_ref()
                     .and_then(|app| app.get_webview_window("douyin-login"))
-                    .is_none();
+                    .is_some();
 
-            let search_result = if !should_use_reqwest {
-                    match self.browser_search(keyword, offset, &search_id).await {
-                        Ok(data) => Ok(data),
-                        Err(e) => {
-                            self.add_error(format!("浏览器搜索失败: {}", e)).await;
-                            // 回退到 reqwest
-                            self.client.search_by_keyword(
-                                keyword,
-                                offset,
-                                self.config.sort_type.clone().unwrap_or(SortType::General),
-                                self.config.publish_time.clone().unwrap_or(PublishTime::Unlimited),
-                                &search_id,
-                            ).await
-                        }
-                    }
+                let search_result = if has_browser {
+                    // 有登录窗口 → 走浏览器（完整签名环境）
+                    self.browser_search(keyword, offset, &search_id).await
                 } else {
-                    self.client.search_by_keyword(
-                        keyword,
-                        offset,
-                        self.config.sort_type.clone().unwrap_or(SortType::General),
-                        self.config.publish_time.clone().unwrap_or(PublishTime::Unlimited),
-                        &search_id,
-                    ).await
+                    // 无登录窗口 → 返回明确错误，提示用户先扫码登录
+                    Err(anyhow!("请先通过「扫码登录」打开登录窗口。仅 Cookie 无法获取签名参数，搜索会失败。"))
                 };
 
                 match search_result {
