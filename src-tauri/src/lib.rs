@@ -3,6 +3,7 @@
 pub mod signer;
 pub mod crawler;
 pub mod storage;
+pub mod excel;
 
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
@@ -61,6 +62,7 @@ async fn start_crawl(
     }
 
     // 创建进度通道
+    let output_dir = config.output_dir.clone();
     let (tx, mut rx) = mpsc::unbounded_channel::<CrawlProgress>();
 
     // 创建爬虫编排器（带浏览器搜索支持和取消令牌）
@@ -94,10 +96,27 @@ async fn start_crawl(
         }
     });
 
-    // 监听进度事件
+    // 监听进度事件，并在采集完成时生成 Excel
     tokio::spawn(async move {
+        let mut last_progress: Option<CrawlProgress> = None;
         while let Some(progress) = rx.recv().await {
+            last_progress = Some(progress.clone());
             let _ = app_for_progress.emit("crawl-progress", &progress);
+        }
+
+        // 采集完成，生成 Excel
+        if let Some(progress) = last_progress {
+            if progress.fetched_videos > 0 {
+                match excel::generate_excel(&output_dir, &progress) {
+                    Ok(()) => {
+                        let _ = app_for_progress.emit("crawl-excel-ready", format!("{}/采集汇总.xlsx", output_dir));
+                    }
+                    Err(e) => {
+                        log::error!("[Crawler] Excel 生成失败: {}", e);
+                        let _ = app_for_progress.emit("crawl-error", format!("Excel 生成失败: {}", e));
+                    }
+                }
+            }
         }
     });
 
