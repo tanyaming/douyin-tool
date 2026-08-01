@@ -193,15 +193,21 @@ impl CrawlerOrchestrator {
                     break;
                 }
 
-                // 使用 a_bogus 签名走 reqwest（不再依赖浏览器窗口）
-                log::info!("[Crawler] reqwest搜索: kw='{}' offset={}", keyword, offset);
-                let search_result = self.client.search_by_keyword(
-                    keyword,
-                    offset,
-                    self.config.sort_type.clone().unwrap_or(SortType::General),
-                    self.config.publish_time.clone().unwrap_or(PublishTime::Unlimited),
-                    &search_id,
-                ).await;
+                // 优先走浏览器窗口（天然带完整指纹，不触发 verify_check），
+                // 浏览器不可用时降级到 reqwest
+                let search_result = if self.app_handle.is_some() && self.app_handle.as_ref().unwrap().get_webview_window("douyin-login").is_some() {
+                    log::info!("[Crawler] 浏览器搜索: kw='{}' offset={}", keyword, offset);
+                    self.browser_search(keyword, offset, &search_id).await
+                } else {
+                    log::info!("[Crawler] reqwest搜索(降级): kw='{}' offset={}", keyword, offset);
+                    self.client.search_by_keyword(
+                        keyword,
+                        offset,
+                        self.config.sort_type.clone().unwrap_or(SortType::General),
+                        self.config.publish_time.clone().unwrap_or(PublishTime::Unlimited),
+                        &search_id,
+                    ).await
+                };
 
                 match search_result {
                     Ok(ref resp) => {
@@ -664,8 +670,7 @@ impl CrawlerOrchestrator {
         Err(anyhow!("评论请求超时（10秒无响应）"))
     }
 
-    #[allow(dead_code)]
-    /// 通过登录窗口的浏览器环境执行搜索（保留备用）
+    /// 通过登录窗口的浏览器环境执行搜索（含完整参数 + a_bogus）
     async fn browser_search(&self, keyword: &str, offset: u32, search_id: &str) -> Result<Value> {
         let app = self.app_handle.as_ref()
             .ok_or_else(|| anyhow!("无 AppHandle"))?;
@@ -673,12 +678,49 @@ impl CrawlerOrchestrator {
             Some(w) => w,
             None => return Err(anyhow!("登录窗口未打开")),
         };
-        let escaped = keyword.replace('\\', "\\\\").replace('"', "\\\"");
-        let _ = win.eval("document.cookie = 'search_result=; path=/'").ok();
-        let js = format!(r#"(async () => {{ try {{ const p = new URLSearchParams({{ search_channel: 'aweme_general', keyword: "{}", search_source: 'tab_search', offset: '{}', count: '15', search_id: '{}' }}); const r = await fetch('/aweme/v1/web/general/search/single/?' + p, {{ credentials: 'include' }}); const d = await r.json(); document.cookie = 'search_result=' + btoa(unescape(encodeURIComponent(JSON.stringify(d)))) + ';path=/'; }} catch(e) {{ document.cookie = 'search_result=' + btoa(unescape(encodeURIComponent(JSON.stringify({{ error: e.message }})))) + ';path=/'; }} }})();"#, escaped, offset, search_id);
+
+        // 构建完整搜索 URL（含所有公共参数 + a_bogus 签名）
+        let full_url = self.client.build_search_url(
+            keyword,
+            offset,
+            self.config.sort_type.clone().unwrap_or(SortType::General),
+            self.config.publish_time.clone().unwrap_or(PublishTime::Unlimited),
+            search_id,
+        )?;
+
+        let _ = win.eval("document.cookie = 'search_result=; path=/';").ok();
+        let escaped_url = full_url.replace('\\', "\\\\").replace('\'', "\\'");
+        let js = format!(
+            r#"(async () => {{ try {{ const r = await fetch('{}', {{ credentials: 'include' }}); const d = await r.json(); document.cookie = 'search_result=' + btoa(unescape(encodeURIComponent(JSON.stringify(d)))) + ';path=/'; }} catch(e) {{ document.cookie = 'search_result=' + btoa(unescape(encodeURIComponent(JSON.stringify({{ error: e.message }})))) + ';path=/'; }} }})();"#,
+            escaped_url
+        );
         win.eval(&js).map_err(|e| anyhow!("执行搜索 JS 失败: {}", e))?;
-        for _ in 0..150 { tokio::time::sleep(tokio::time::Duration::from_millis(100)).await; if app.get_webview_window("douyin-login").is_none() { return Err(anyhow!("登录窗口已关闭")); } if let Ok(cookies) = win.cookies() { for c in &cookies { if c.name() == "search_result" { let raw = c.value(); if raw.is_empty() { continue; } use base64::Engine; let decoded = base64::engine::general_purpose::STANDARD.decode(raw.as_bytes()).map_err(|e| anyhow!("base64: {}", e))?; let json_str = String::from_utf8(decoded).map_err(|e| anyhow!("utf8: {}", e))?; return Ok(serde_json::from_str(&json_str)?); } } } } Err(anyhow!("搜索超时（15秒无响应）"))
+
+        for _ in 0..200 {
+            if self.cancel.is_cancelled() { return Err(anyhow!("任务已取消")); }
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            if app.get_webview_window("douyin-login").is_none() {
+                return Err(anyhow!("登录窗口已关闭"));
+            }
+            if let Ok(cookies) = win.cookies() {
+                for c in &cookies {
+                    if c.name() == "search_result" {
+                        let raw = c.value();
+                        if raw.is_empty() { continue; }
+                        use base64::Engine;
+                        let decoded = base64::engine::general_purpose::STANDARD
+                            .decode(raw.as_bytes())
+                            .map_err(|e| anyhow!("base64: {}", e))?;
+                        let json_str = String::from_utf8(decoded)
+                            .map_err(|e| anyhow!("utf8: {}", e))?;
+                        return Ok(serde_json::from_str(&json_str)?);
+                    }
+                }
+            }
+        }
+        Err(anyhow!("浏览器搜索超时（20秒无响应）"))
     }
+
 
     async fn update_progress<F>(&self, f: F)
     where

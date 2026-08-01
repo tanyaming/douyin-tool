@@ -383,6 +383,7 @@ function startCookiePolling() {
           cookiePollTimer = null;
           cookieInput.value = result.cookies;
           loginStatus.value = "connected";
+          localStorage.setItem("douyin_cookies", result.cookies);
           ElMessage.success("扫码登录成功！Cookie 已保存，登录窗口可以关闭了");
         }
       } catch (e) {
@@ -398,6 +399,7 @@ async function handleCookieLogin() {
     return;
   }
   loginStatus.value = "connected";
+  localStorage.setItem("douyin_cookies", cookieInput.value.trim());
   ElMessage.success("Cookie 已保存，可以开始采集");
 }
 
@@ -513,6 +515,13 @@ onMounted(async () => {
     ElMessage.error(err);
     progress.value.status = { Error: err };
   });
+
+  // 从本地存储恢复上次保存的 Cookie
+  const saved = localStorage.getItem("douyin_cookies");
+  if (saved && saved.length > 50) {
+    cookieInput.value = saved;
+    loginStatus.value = "connected";
+  }
 });
 
 onUnmounted(() => {

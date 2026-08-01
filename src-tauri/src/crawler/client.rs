@@ -153,9 +153,73 @@ impl DouyinClient {
         }
 
         let url = format!("{}{}", self.base_url, uri);
+
+        // 构建完整 URL 供 browser_search 使用
+        let _full_url = self.build_search_url(keyword, offset, sort_type, publish_time, search_id)?;
+
         let resp = self.client.get(&url).query(&params).send().await?;
-        let json: Value = resp.json().await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        let preview = &text[..text.len().min(300)];
+        log::info!("[Client] 搜索响应 HTTP={} 前300={}", status.as_u16(), preview);
+        let json: Value = serde_json::from_str(&text)
+            .map_err(|e| anyhow::anyhow!("搜索响应JSON解析失败: {} - 原文前200: {}", e, &text[..text.len().min(200)]))?;
         Ok(json)
+    }
+
+    /// 构建完整搜索 URL（含所有参数 + a_bogus），供 browser_search 使用
+    pub fn build_search_url(
+        &self,
+        keyword: &str,
+        offset: u32,
+        sort_type: SortType,
+        publish_time: PublishTime,
+        search_id: &str,
+    ) -> Result<String> {
+        let mut params = std::collections::HashMap::new();
+        params.insert("search_channel".to_string(), SearchChannel::General.value().to_string());
+        params.insert("enable_history".to_string(), "1".to_string());
+        params.insert("keyword".to_string(), keyword.to_string());
+        params.insert("search_source".to_string(), "tab_search".to_string());
+        params.insert("query_correct_type".to_string(), "1".to_string());
+        params.insert("is_filter_search".to_string(), "0".to_string());
+        params.insert("from_group_id".to_string(), "7378810571505847586".to_string());
+        params.insert("offset".to_string(), offset.to_string());
+        params.insert("count".to_string(), "15".to_string());
+        params.insert("need_filter_settings".to_string(), "1".to_string());
+        params.insert("list_type".to_string(), "multi".to_string());
+        params.insert("search_id".to_string(), search_id.to_string());
+
+        if sort_type.value() != 0 || publish_time.value() != 0 {
+            let filter = serde_json::json!({
+                "sort_type": sort_type.value().to_string(),
+                "publish_time": publish_time.value().to_string(),
+            });
+            params.insert("filter_selected".to_string(), filter.to_string());
+            params.insert("is_filter_search".to_string(), "1".to_string());
+        }
+
+        for (k, v) in self.signer.common_params() {
+            params.insert(k.to_string(), v);
+        }
+
+        let query_string: String = params.iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join("&");
+        let uri = "/aweme/v1/web/general/search/single/";
+        let a_bogus = self.signer.sign_uri(uri, &query_string);
+        if !a_bogus.is_empty() {
+            params.insert("a_bogus".to_string(), a_bogus);
+        }
+
+        let url = format!("{}{}", self.base_url, uri);
+        // 手动拼接 URL 避免 reqwest 自动编码问题
+        let full_url = format!("{}?{}", url, params.iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join("&"));
+        Ok(full_url)
     }
 
     /// 获取视频详情

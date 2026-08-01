@@ -321,13 +321,10 @@ impl Signer {
     /// uri: 如 "/aweme/v1/web/comment/list/"
     /// query: 已经 URL-encoded 的查询字符串
     pub fn sign_uri(&self, uri: &str, query: &str) -> String {
-        if uri.contains("search") {
-            // 搜索接口不需要 a_bogus
-            return String::new();
-        }
         if uri.contains("reply") {
             return sign_reply(query, &self.user_agent);
         }
+        // 搜索和详情都用 sign_datail
         sign_datail(query, &self.user_agent)
     }
 }
