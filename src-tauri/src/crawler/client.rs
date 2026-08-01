@@ -295,7 +295,8 @@ impl DouyinClient {
 
     /// 下载媒体文件（视频或图片）
     pub async fn download_media(&self, url: &str) -> Result<Vec<u8>> {
-        // 媒体下载用独立 client，不带 Host: www.douyin.com（CDN 域名各异）
+        // 媒体下载用独立 client，不带 Host header（CDN 域名各异）
+        // 注意：抖音 /aweme/v1/play/ 直接返回视频流（无 302），Content-Length 可达数百 MB
         let media_client = reqwest::Client::builder()
             .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
             .default_headers({
@@ -303,7 +304,11 @@ impl DouyinClient {
                 headers.insert(reqwest::header::REFERER, reqwest::header::HeaderValue::from_static("https://www.douyin.com/"));
                 headers
             })
-            .timeout(std::time::Duration::from_secs(60))
+            .no_gzip()    // 视频流不需要解压，避免 decoding error
+            .no_brotli()
+            .no_deflate()
+            .timeout(std::time::Duration::from_secs(300))  // 大视频可能需要 5 分钟
+            .connect_timeout(std::time::Duration::from_secs(15))
             .build()?;
 
         let resp = media_client
@@ -314,7 +319,10 @@ impl DouyinClient {
         if !status.is_success() {
             return Err(anyhow::anyhow!("下载失败 HTTP {}: {}", status.as_u16(), url));
         }
-        let bytes = resp.bytes().await?;
+        let content_length = resp.content_length().unwrap_or(0);
+        let bytes = resp.bytes().await
+            .map_err(|e| anyhow::anyhow!("下载 {} 字节后失败 (预期 {} MB): {}", 
+                e.to_string().len(), content_length / 1024 / 1024, e))?;
         if bytes.is_empty() {
             return Err(anyhow::anyhow!("下载到空文件: {}", url));
         }
