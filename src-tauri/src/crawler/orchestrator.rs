@@ -403,9 +403,18 @@ impl CrawlerOrchestrator {
             self.fetch_comments(&aweme_id).await?;
         }
 
-        // 下载媒体
+        // 下载媒体（重新获取视频详情以获得新鲜CDN URL）
         if self.config.enable_media {
-            self.download_media_files(&aweme_id, aweme).await?;
+            match self.client.get_video_detail(&aweme_id).await {
+                Ok(fresh_aweme) => {
+                    self.download_media_files(&aweme_id, &fresh_aweme).await?;
+                }
+                Err(e) => {
+                    // 接口失败时用已有的旧URL兜底
+                    log::warn!("[Crawler] 重新获取视频详情失败(aweme={}), 用旧URL尝试下载: {}", aweme_id, e);
+                    self.download_media_files(&aweme_id, aweme).await?;
+                }
+            }
         }
 
         Ok(())
@@ -563,23 +572,52 @@ impl CrawlerOrchestrator {
 
         // 尝试提取图片列表（图文帖子）
         let image_urls = extract_image_list(aweme);
+        let video_urls = extract_video_urls(aweme);
+        log::info!("[Crawler] aweme={} 图片数={} 视频URL数={}", aweme_id, image_urls.len(), video_urls.len());
+
         if !image_urls.is_empty() {
             for (i, url) in image_urls.iter().enumerate() {
-                if let Ok(bytes) = self.client.download_media(url).await {
-                    let path = format!("{}/{:03}.jpeg", output_dir, i);
-                    std::fs::write(&path, bytes)?;
-                    self.increment_progress(|p| p.downloaded_media += 1).await;
+                match self.client.download_media(url).await {
+                    Ok(bytes) => {
+                        let path = format!("{}/{:03}.jpeg", output_dir, i);
+                        std::fs::write(&path, bytes)?;
+                        log::info!("[Crawler] 图片下载成功: {}", path);
+                        self.increment_progress(|p| p.downloaded_media += 1).await;
+                    }
+                    Err(e) => {
+                        log::warn!("[Crawler] 图片CDN节点{}下载失败: {}", i, e);
+                    }
                 }
             }
         }
 
-        // 尝试提取视频
-        if let Some(video_url) = extract_video_url(aweme) {
-            if let Ok(bytes) = self.client.download_media(&video_url).await {
-                let path = format!("{}/video.mp4", output_dir);
-                std::fs::write(&path, bytes)?;
-                self.increment_progress(|p| p.downloaded_media += 1).await;
+        // 尝试所有CDN节点下载视频
+        if !video_urls.is_empty() {
+            let mut downloaded = false;
+            for (i, video_url) in video_urls.iter().enumerate() {
+                log::info!("[Crawler] 尝试视频CDN节点{}/{} aweme={}", i + 1, video_urls.len(), aweme_id);
+                match self.client.download_media(video_url).await {
+                    Ok(bytes) => {
+                        let byte_len = bytes.len();
+                        let path = format!("{}/video.mp4", output_dir);
+                        std::fs::write(&path, bytes)?;
+                        log::info!("[Crawler] 视频下载成功(节点{}): {} ({} bytes)", i + 1, path, byte_len);
+                        self.increment_progress(|p| p.downloaded_media += 1).await;
+                        downloaded = true;
+                        break;
+                    }
+                    Err(e) => {
+                        log::warn!("[Crawler] 视频CDN节点{}下载失败: {}", i + 1, e);
+                    }
+                }
             }
+            if !downloaded {
+                let err_msg = format!("视频下载失败(aweme={}): 所有{}个CDN节点均不可达", aweme_id, video_urls.len());
+                log::error!("[Crawler] {}", err_msg);
+                self.add_error(err_msg).await;
+            }
+        } else {
+            log::warn!("[Crawler] aweme={} 未提取到视频URL", aweme_id);
         }
 
         Ok(())
@@ -693,12 +731,29 @@ fn extract_image_list(aweme: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// 从视频详情提取视频URL
-fn extract_video_url(aweme: &Value) -> Option<String> {
-    // 尝试多种路径
-    let candidates = [
-        aweme.get("video")?.get("play_addr")?.get("url_list")?.as_array()?.first()?.as_str()?,
-        aweme.get("video")?.get("download_addr")?.get("url_list")?.as_array()?.first()?.as_str()?,
+/// 从视频详情提取所有可用的视频URL（返回列表以便重试）
+fn extract_video_urls(aweme: &Value) -> Vec<String> {
+    let video = match aweme.get("video") {
+        Some(v) => v,
+        None => return vec![],
+    };
+
+    let addr_keys = [
+        "play_addr_h264",
+        "play_addr",
+        "download_addr",
     ];
-    candidates.into_iter().next().map(|s| s.to_string())
+
+    let mut urls = Vec::new();
+    for key in addr_keys.iter() {
+        if let Some(url_list) = video.get(key).and_then(|a| a.get("url_list")).and_then(|u| u.as_array()) {
+            for url_val in url_list {
+                if let Some(url_str) = url_val.as_str() {
+                    urls.push(url_str.to_string());
+                }
+            }
+        }
+    }
+
+    urls
 }

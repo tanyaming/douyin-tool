@@ -45,8 +45,8 @@ pub fn parse_video_url(input: &str) -> Result<VideoUrlInfo> {
         return Ok(VideoUrlInfo::new(input.to_string(), UrlType::RawId));
     }
 
-    // 2. 短链
-    if input.contains("v.douyin.com") || (input.len() < 50 && input.starts_with("http")) {
+    // 2. 短链（排除已知的长链接格式）
+    if input.contains("v.douyin.com") {
         return Ok(VideoUrlInfo::new(input.to_string(), UrlType::Short));
     }
 

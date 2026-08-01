@@ -297,10 +297,18 @@ impl DouyinClient {
     pub async fn download_media(&self, url: &str) -> Result<Vec<u8>> {
         let resp = self.client
             .get(url)
+            .header("Referer", "https://www.douyin.com/")
             .timeout(std::time::Duration::from_secs(120))
             .send()
             .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(anyhow::anyhow!("下载失败 HTTP {}: {}", status.as_u16(), url));
+        }
         let bytes = resp.bytes().await?;
+        if bytes.is_empty() {
+            return Err(anyhow::anyhow!("下载到空文件: {}", url));
+        }
         Ok(bytes.to_vec())
     }
 
