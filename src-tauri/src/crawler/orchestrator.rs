@@ -731,13 +731,15 @@ fn extract_image_list(aweme: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// 从视频详情提取所有可用的视频URL（返回列表以便重试）
+/// 从视频详情提取所有可用的视频URL（参考 MediaCrawler: 取 url_list 最后一位）
 fn extract_video_urls(aweme: &Value) -> Vec<String> {
     let video = match aweme.get("video") {
         Some(v) => v,
         None => return vec![],
     };
 
+    // 按优先级: play_addr_h264 → play_addr → download_addr
+    // MediaCrawler 的做法: 取 url_list 最后一位（主站地址，非 CDN）
     let addr_keys = [
         "play_addr_h264",
         "play_addr",
@@ -747,10 +749,9 @@ fn extract_video_urls(aweme: &Value) -> Vec<String> {
     let mut urls = Vec::new();
     for key in addr_keys.iter() {
         if let Some(url_list) = video.get(key).and_then(|a| a.get("url_list")).and_then(|u| u.as_array()) {
-            for url_val in url_list {
-                if let Some(url_str) = url_val.as_str() {
-                    urls.push(url_str.to_string());
-                }
+            // 取最后一位（www.douyin.com/aweme/v1/play/ 主站地址）
+            if let Some(last_url) = url_list.last().and_then(|v| v.as_str()) {
+                urls.push(last_url.to_string());
             }
         }
     }

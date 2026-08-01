@@ -295,10 +295,19 @@ impl DouyinClient {
 
     /// 下载媒体文件（视频或图片）
     pub async fn download_media(&self, url: &str) -> Result<Vec<u8>> {
-        let resp = self.client
+        // 媒体下载用独立 client，不带 Host: www.douyin.com（CDN 域名各异）
+        let media_client = reqwest::Client::builder()
+            .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+            .default_headers({
+                let mut headers = reqwest::header::HeaderMap::new();
+                headers.insert(reqwest::header::REFERER, reqwest::header::HeaderValue::from_static("https://www.douyin.com/"));
+                headers
+            })
+            .timeout(std::time::Duration::from_secs(60))
+            .build()?;
+
+        let resp = media_client
             .get(url)
-            .header("Referer", "https://www.douyin.com/")
-            .timeout(std::time::Duration::from_secs(120))
             .send()
             .await?;
         let status = resp.status();
