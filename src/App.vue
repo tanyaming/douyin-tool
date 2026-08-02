@@ -413,7 +413,7 @@ const form = ref({
   enableMedia: false,
   sortType: "General",
   publishTime: "Unlimited",
-  outputDir: "",
+  outputDir: "",  // 默认值由后端兜底，前端加载时也会通过 Tauri API 获取桌面路径
   sleepSecs: 2,
 });
 
@@ -473,7 +473,7 @@ async function handleStart() {
     enable_media: form.value.enableMedia,
     sort_type: form.value.sortType as "General" | "MostLike" | "Latest",
     publish_time: form.value.publishTime as "Unlimited" | "OneDay" | "OneWeek" | "SixMonths",
-    output_dir: form.value.outputDir || "./data",
+    output_dir: form.value.outputDir,  // 为空时后端自动使用桌面/douyinData
     sleep_secs: form.value.sleepSecs,
   };
 
@@ -521,6 +521,16 @@ onMounted(async () => {
   if (saved && saved.length > 50) {
     cookieInput.value = saved;
     loginStatus.value = "connected";
+  }
+
+  // 设置默认输出目录显示（桌面/douyinData）
+  if (!form.value.outputDir) {
+    try {
+      const { desktopDir } = await import("@tauri-apps/api/path");
+      form.value.outputDir = `${await desktopDir()}/douyinData`;
+    } catch {
+      form.value.outputDir = "./data";
+    }
   }
 });
 

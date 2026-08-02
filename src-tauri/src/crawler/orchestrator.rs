@@ -59,7 +59,7 @@ impl Default for CrawlConfig {
             enable_media: false,
             sort_type: Some(SortType::General),
             publish_time: Some(PublishTime::Unlimited),
-            output_dir: "./data".to_string(),
+            output_dir: default_output_dir(),
             sleep_secs: 2,
         }
     }
@@ -573,13 +573,23 @@ impl CrawlerOrchestrator {
 
     /// 下载媒体文件
     async fn download_media_files(&self, aweme_id: &str, aweme: &Value) -> Result<()> {
-        let output_dir = format!("{}/aweme_{}", self.config.output_dir, aweme_id);
+        // 提取作者名和标题，生成安全的文件名
+        let author_name = aweme.get("author")
+            .and_then(|a| a.get("nickname"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("未知作者");
+        let title = aweme.get("desc")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let safe_name = make_safe_filename(author_name, title);
+
+        let output_dir = format!("{}/{}", self.config.output_dir, safe_name);
         std::fs::create_dir_all(&output_dir)?;
 
         // 尝试提取图片列表（图文帖子）
         let image_urls = extract_image_list(aweme);
         let video_urls = extract_video_urls(aweme);
-        log::info!("[Crawler] aweme={} 图片数={} 视频URL数={}", aweme_id, image_urls.len(), video_urls.len());
+        log::info!("[Crawler] aweme={} 作者={} 标题={} 图片数={} 视频URL数={}", aweme_id, author_name, title, image_urls.len(), video_urls.len());
 
         if !image_urls.is_empty() {
             for (i, url) in image_urls.iter().enumerate() {
@@ -605,7 +615,7 @@ impl CrawlerOrchestrator {
                 match self.client.download_media(video_url).await {
                     Ok(bytes) => {
                         let byte_len = bytes.len();
-                        let path = format!("{}/video.mp4", output_dir);
+                        let path = format!("{}/{}.mp4", output_dir, safe_name);
                         std::fs::write(&path, bytes)?;
                         log::info!("[Crawler] 视频下载成功(节点{}): {} ({} bytes)", i + 1, path, byte_len);
                         self.increment_progress(|p| p.downloaded_media += 1).await;
@@ -754,6 +764,50 @@ impl CrawlerOrchestrator {
         if self.config.sleep_secs > 0 {
             tokio::time::sleep(tokio::time::Duration::from_secs(self.config.sleep_secs as u64)).await;
         }
+    }
+}
+
+/// 获取默认输出目录：系统桌面/douyinData（Windows/macOS 通用）
+pub fn default_output_dir() -> String {
+    if let Some(desktop) = dirs::desktop_dir() {
+        format!("{}/douyinData", desktop.display())
+    } else {
+        "./data".to_string()
+    }
+}
+
+/// 生成安全的文件名：作者名_标题前10字
+/// - 取作者昵称 + 视频标题前10个字符
+/// - 移除文件系统不允许的字符（/ : * ? " < > | \\ 等）
+/// - 截断到 100 字节以内（留足余量给扩展名和路径）
+fn make_safe_filename(author_name: &str, title: &str) -> String {
+    // 取标题前10个字符（按字符数，不是字节数）
+    let title_short: String = title.chars().take(10).collect();
+    let raw = format!("{}_{}", author_name, title_short);
+
+    // 替换文件系统非法字符
+    let sanitized: String = raw
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0' => '_',
+            '\n' | '\r' | '\t' => ' ',  // 换行/制表符替换为空格
+            _ => c,
+        })
+        .collect();
+
+    // 去除首尾空格和点
+    let trimmed = sanitized.trim().trim_matches('.').to_string();
+
+    // 如果为空，给个默认名
+    if trimmed.is_empty() {
+        return "video".to_string();
+    }
+
+    // 按字节截断到 100 字节（macOS 文件名上限 255 UTF-8 字节，留足余量）
+    if trimmed.len() > 100 {
+        trimmed.chars().take(100).collect()
+    } else {
+        trimmed
     }
 }
 

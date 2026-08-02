@@ -35,3 +35,4 @@ rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.23.0"
 rust_xlsxwriter = "0.92.0"
+dirs = "5"

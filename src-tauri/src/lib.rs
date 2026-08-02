@@ -12,7 +12,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder
 use serde_json::Value;
 
 use crawler::client::DouyinClient;
-use crawler::orchestrator::{CrawlConfig, CrawlerOrchestrator, CrawlProgress};
+use crawler::orchestrator::{CrawlConfig, CrawlerOrchestrator, CrawlProgress, default_output_dir};
 
 /// 全局应用状态
 pub struct AppState {
@@ -62,6 +62,11 @@ async fn start_crawl(
     }
 
     // 创建进度通道
+    let mut config = config;
+    // 空字符串时使用默认桌面路径
+    if config.output_dir.is_empty() {
+        config.output_dir = default_output_dir();
+    }
     let output_dir = config.output_dir.clone();
     let (tx, mut rx) = mpsc::unbounded_channel::<CrawlProgress>();
 
