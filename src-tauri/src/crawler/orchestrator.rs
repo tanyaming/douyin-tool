@@ -406,7 +406,7 @@ impl CrawlerOrchestrator {
 
         // 获取评论
         if self.config.enable_comments {
-            self.fetch_comments(&aweme_id).await?;
+            self.fetch_comments(&aweme_id, aweme).await?;
         }
 
         // 下载媒体（重新获取视频详情以获得新鲜CDN URL）
@@ -443,8 +443,9 @@ impl CrawlerOrchestrator {
     }
 
     /// 保存视频详情
-    async fn save_aweme_detail(&self, aweme_id: &str, aweme: &Value) -> Result<()> {
-        let output_dir = format!("{}/aweme_{}", self.config.output_dir, aweme_id);
+    async fn save_aweme_detail(&self, _aweme_id: &str, aweme: &Value) -> Result<()> {
+        let dir_name = aweme_dir_name(aweme);
+        let output_dir = format!("{}/{}", self.config.output_dir, dir_name);
         std::fs::create_dir_all(&output_dir)?;
 
         let json_path = format!("{}/detail.json", output_dir);
@@ -463,7 +464,7 @@ impl CrawlerOrchestrator {
     }
 
     /// 获取评论
-    async fn fetch_comments(&self, aweme_id: &str) -> Result<()> {
+    async fn fetch_comments(&self, aweme_id: &str, aweme: &Value) -> Result<()> {
         let mut cursor = 0u32;
         let mut comments: Vec<Value> = Vec::new();
 
@@ -522,7 +523,8 @@ impl CrawlerOrchestrator {
 
         // 保存评论
         if !comments.is_empty() {
-            let output_dir = format!("{}/aweme_{}", self.config.output_dir, aweme_id);
+            let dir_name = aweme_dir_name(aweme);
+            let output_dir = format!("{}/{}", self.config.output_dir, dir_name);
             std::fs::create_dir_all(&output_dir)?;
             let json_path = format!("{}/comments.json", output_dir);
             std::fs::write(&json_path, serde_json::to_string_pretty(&comments)?)?;
@@ -573,18 +575,11 @@ impl CrawlerOrchestrator {
 
     /// 下载媒体文件
     async fn download_media_files(&self, aweme_id: &str, aweme: &Value) -> Result<()> {
-        // 提取作者名和标题，生成安全的文件名
-        let author_name = aweme.get("author")
-            .and_then(|a| a.get("nickname"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("未知作者");
-        let title = aweme.get("desc")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let safe_name = make_safe_filename(author_name, title);
-
+        let safe_name = aweme_dir_name(aweme);
         let output_dir = format!("{}/{}", self.config.output_dir, safe_name);
         std::fs::create_dir_all(&output_dir)?;
+        let author_name = safe_name.split('_').next().unwrap_or("");
+        let title = aweme.get("desc").and_then(|v| v.as_str()).unwrap_or("");
 
         // 尝试提取图片列表（图文帖子）
         let image_urls = extract_image_list(aweme);
@@ -811,6 +806,19 @@ fn make_safe_filename(author_name: &str, title: &str) -> String {
     }
 }
 
+/// 从 aweme 提取统一的安全目录名：作者昵称_标题前10字
+/// 供 video 详情/评论/媒体下载共用，保证每个视频只有一个文件夹
+fn aweme_dir_name(aweme: &Value) -> String {
+    let author_name = aweme.get("author")
+        .and_then(|a| a.get("nickname"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("未知作者");
+    let title = aweme.get("desc")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    make_safe_filename(author_name, title)
+}
+
 /// 从视频详情提取图片列表
 fn extract_image_list(aweme: &Value) -> Vec<String> {
     aweme.get("images")
@@ -827,7 +835,8 @@ fn extract_image_list(aweme: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// 从视频详情提取所有可用的视频URL（参考 MediaCrawler: 取 url_list 最后一位）
+/// 从视频详情提取所有可用的视频URL
+/// 参考 MediaCrawler，但优化顺序：优先 CDN 直链（无 douyin.com 域名的），主站 play 地址放最后兑底
 fn extract_video_urls(aweme: &Value) -> Vec<String> {
     let video = match aweme.get("video") {
         Some(v) => v,
@@ -835,22 +844,43 @@ fn extract_video_urls(aweme: &Value) -> Vec<String> {
     };
 
     // 按优先级: play_addr_h264 → play_addr → download_addr
-    // MediaCrawler 的做法: 取 url_list 最后一位（主站地址，非 CDN）
     let addr_keys = [
         "play_addr_h264",
         "play_addr",
         "download_addr",
     ];
 
-    let mut urls = Vec::new();
+    let mut cdn_urls: Vec<String> = Vec::new();
+    let mut main_urls: Vec<String> = Vec::new();
+
     for key in addr_keys.iter() {
         if let Some(url_list) = video.get(key).and_then(|a| a.get("url_list")).and_then(|u| u.as_array()) {
-            // 取最后一位（www.douyin.com/aweme/v1/play/ 主站地址）
-            if let Some(last_url) = url_list.last().and_then(|v| v.as_str()) {
-                urls.push(last_url.to_string());
+            // 遍历 url_list：CDN 直链（非 douyin.com 域名）优先，主站 play 地址后放
+            for v in url_list.iter() {
+                if let Some(s) = v.as_str() {
+                    if s.contains("douyin.com") && s.contains("/aweme/v1/play/") {
+                        main_urls.push(s.to_string());
+                    } else {
+                        cdn_urls.push(s.to_string());
+                    }
+                }
+            }
+            // 若某 key 完全没有 CDN 直链，则保留其主站地址兑底
+            if cdn_urls.is_empty() {
+                if let Some(last_url) = url_list.last().and_then(|v| v.as_str()) {
+                    main_urls.push(last_url.to_string());
+                }
             }
         }
     }
 
-    urls
+    // 去重（保持顺序）
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    for u in cdn_urls.into_iter().chain(main_urls) {
+        if seen.insert(u.clone()) {
+            result.push(u);
+        }
+    }
+    result
 }

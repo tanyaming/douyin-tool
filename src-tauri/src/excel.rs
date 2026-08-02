@@ -170,21 +170,24 @@ fn write_comments_sheet(sheet: &mut Worksheet, output_dir: &str) -> Result<()> {
     for entry in dirs {
         let entry = entry?;
         let dir_name = entry.file_name().to_string_lossy().to_string();
-        if !dir_name.starts_with("aweme_") {
+
+        // 只处理视频目录（含 detail.json 的目录），跳过创作者目录和散落文件
+        let detail_path = format!("{}/{}/detail.json", output_dir, dir_name);
+        if !std::path::Path::new(&detail_path).exists() {
             continue;
         }
-        let aweme_id = dir_name.strip_prefix("aweme_").unwrap_or("");
 
-        // 读取 detail.json 获取视频描述
-        let detail_path = format!("{}/{}/detail.json", output_dir, dir_name);
-        let desc = if let Ok(content) = std::fs::read_to_string(&detail_path) {
+        // 读取 detail.json 获取视频描述和 aweme_id
+        let (desc, aweme_id) = if let Ok(content) = std::fs::read_to_string(&detail_path) {
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                val.get("desc").and_then(|v| v.as_str()).unwrap_or("").to_string()
+                let d = val.get("desc").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let id = val.get("aweme_id").and_then(|v| v.as_str()).unwrap_or(dir_name.as_str()).to_string();
+                (d, id)
             } else {
-                String::new()
+                (String::new(), dir_name.clone())
             }
         } else {
-            String::new()
+            (String::new(), dir_name.clone())
         };
 
         // 读取 comments.json
@@ -207,7 +210,7 @@ fn write_comments_sheet(sheet: &mut Worksheet, output_dir: &str) -> Result<()> {
             sheet.write(row, 0, row)?;
 
             // 视频ID
-            sheet.write(row, 1, aweme_id)?;
+            sheet.write(row, 1, &aweme_id)?;
 
             // 视频描述
             sheet.write(row, 2, &desc)?;

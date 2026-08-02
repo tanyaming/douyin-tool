@@ -160,7 +160,13 @@ impl DouyinClient {
         let resp = self.client.get(&url).query(&params).send().await?;
         let status = resp.status();
         let text = resp.text().await?;
-        let preview = &text[..text.len().min(300)];
+        // 安全截断：在字符边界上切，避免 UTF-8 中间截断 panic
+        let preview_end = text.char_indices()
+            .take(300)
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(text.len());
+        let preview = &text[..preview_end.min(text.len())];
         log::info!("[Client] 搜索响应 HTTP={} 前300={}", status.as_u16(), preview);
         let json: Value = serde_json::from_str(&text)
             .map_err(|e| anyhow::anyhow!("搜索响应JSON解析失败: {} - 原文前200: {}", e, &text[..text.len().min(200)]))?;
@@ -361,13 +367,17 @@ impl DouyinClient {
     pub async fn download_media(&self, url: &str) -> Result<Vec<u8>> {
         // 媒体下载用独立 client，不带 Host header（CDN 域名各异）
         // 注意：抖音 /aweme/v1/play/ 直接返回视频流（无 302），Content-Length 可达数百 MB
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::REFERER, reqwest::header::HeaderValue::from_static("https://www.douyin.com/"));
+        // 主站 play 接口需要登录 Cookie，否则返回极小错误响应
+        if !self._cookies.is_empty() {
+            if let Ok(cookie_val) = reqwest::header::HeaderValue::from_str(&self._cookies) {
+                headers.insert(reqwest::header::COOKIE, cookie_val);
+            }
+        }
         let media_client = reqwest::Client::builder()
             .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-            .default_headers({
-                let mut headers = reqwest::header::HeaderMap::new();
-                headers.insert(reqwest::header::REFERER, reqwest::header::HeaderValue::from_static("https://www.douyin.com/"));
-                headers
-            })
+            .default_headers(headers)
             .no_gzip()    // 视频流不需要解压，避免 decoding error
             .no_brotli()
             .no_deflate()
